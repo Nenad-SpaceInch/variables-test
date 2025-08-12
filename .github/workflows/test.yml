@@ -1,36 +1,89 @@
-# This is a basic workflow to help you get started with Actions
+name: Figma Plugin - Variables Sync
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      data:
+        description: 'Config data (JSON string of an array)'
+        required: true
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  create-pr:
     runs-on: ubuntu-latest
+    
+    env:
+      CONFIG_PATH: 'figma/figma-variables-config.json'
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    permissions:
+      contents: write
+      pull-requests: write
+
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Set up Git
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          git config user.name "figma-variables-sync-action"
+          git config user.email "figma-variables-sync-action@spaceinch.com"
+          git config --get user.name
+          git config --get user.email
+
+      - name: Create branch
+        id: branch
+        run: |
+          BRANCH_NAME=config-update-$(date +%s)
+          git checkout -b $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Current branch: $(git branch --show-current)"
+          git status
+
+      - name: Write config.json
+        run: |
+          # Extract directory path and create if it doesn't exist
+          DIR_PATH=$(dirname "${{ env.CONFIG_PATH }}")
+          echo "Creating directory: $DIR_PATH"
+          mkdir -p "$DIR_PATH"
+          
+          # Write the config file
+          echo '${{ github.event.inputs.data }}' | jq '.' > "${{ env.CONFIG_PATH }}"
+          echo "Config file written to ${{ env.CONFIG_PATH }}"
+          
+          # Debug: Check if file exists and show content
+          ls -la "$DIR_PATH"
+          cat "${{ env.CONFIG_PATH }}"
+
+      - name: Debug repository state
+        run: |
+          echo "Current branch: $(git branch --show-current)"
+          git status
+          git diff
+
+      - name: Commit changes
+        run: |
+          # Ensure the file exists before committing
+          if [ ! -f "${{ env.CONFIG_PATH }}" ]; then
+            echo "ERROR: File ${{ env.CONFIG_PATH }} does not exist!"
+            exit 1
+          fi
+          
+          git add "${{ env.CONFIG_PATH }}"
+          git status
+          git commit -m "Add config file at ${{ env.CONFIG_PATH }}"
+          echo "Current branch after commit: $(git branch --show-current)"
+          git status
+
+      - name: Push changes
+        run: |
+          echo "Pushing to branch ${{ steps.branch.outputs.branch_name }}"
+          git push -u origin ${{ steps.branch.outputs.branch_name }}
+          echo "Push completed"
+          git status
+          
+      - name: Run the Action
+        uses: devops-infra/action-pull-request@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          source_branch: ${{ steps.branch.outputs.branch_name }}
+          target_branch: develop
+          title: "Figma Variables Sync -> ${{ steps.branch.outputs.branch_name }}"
